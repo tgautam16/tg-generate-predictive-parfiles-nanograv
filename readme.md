@@ -1,8 +1,2 @@
-# Hi, this is readme..
-# Hello 
-
-#hiii
-
-#hellooo
-
-# new branch 2
+# Code to simplify nanograv pulsars ephemeris
+# Include class TOA_tg
