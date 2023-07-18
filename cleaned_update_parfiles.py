@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-
-
 import os, os.path, glob, pickle
 import numpy as np
 import pint.toa as pt
@@ -20,29 +18,32 @@ from astropy import units as u
 from astropy.time import Time
 pint.logging.setup(level="ERROR")
 plt.rcParams.update({'font.size': 22})
+#Changing working directory to the base of timing analysis folder
+os.chdir('../.')
 
-
-
-class TOA_tg:
-    
-    def __init__(self,psr,configfile,MJDlow=59000.0 *au.d,SNRcut=8.0,zthres=1.0): #Initial configfile to initiate the class
+class Pred_par:
+    # Need configfile to initiate the class
+    def __init__(self,psr,configfile,MJDlow=57000.0*au.d,MJDhigh=58000.0*au.d,SNRcut=8.0,zthres=1.0): 
         self.configfile=configfile
         self.psr=psr
         self.MJDlow=MJDlow
+        self.MJDhigh=MJDhigh
         self.SNRcut=SNRcut
         self.zthres=zthres
         tc=TimingConfiguration(self.configfile)
         self.tc = tc
-    
+        
+    # Load the original 15yr TOAs and model
     def load_toas(self):
-        # Load the original 15yr TOAs and model
         mo,to = self.tc.get_model_and_toas(excised=True,usepickle=True)
         if not to: mo,to = self.tc.get_model_and_toas(apply_initial_cuts=True)
         return mo,to
     
+    # Apply manual cuts
     def cut_toas(self,to):
         self.tc.manual_cuts(to)
-        
+    
+    # Read and merge recent TOAs 
     def load_merge_qck_toas(self,tqfilenms,quicklookdir,to,mo):
         # Read in all the recent quicklook TOAs
         tq = pt.get_TOAs(tqfilenms, model=mo) 
@@ -51,20 +52,18 @@ class TOA_tg:
         tq.table = tq.table[snrs > self.SNRcut]
         # Combine the TOAs
         tall = pt.merge_TOAs([to, tq])
-        tall.table = tall.table[:]
-        # Calculate the pulse numbers based on the 15yr solutions
-        tall.compute_pulse_numbers(mo)
-        #def remove_qck_toas(self):
         return tall
     
-    def simplify_parfile(self, tall, parout,otherflag=None):
-        """Convert a complicated 15yr parfile into a simplified parfile"""
-        # We will remove all lines that begin with the following
+    # Remove all lines that begin with the following
         # FD params, FB derivs (but not FB0), all DMX params, and red noise params
         # and for TEMPO compatability, also remove SWM, troposphere, and 
         # planet shapiro correction.  And finally, remove ECORR.
-        # Remove JUMP statement that correspond to an old receiver - Find reciever and remove jump from simple model if no mjd more than MJDlow
-        rcvr=np.unique(tall.table['fe'])
+        # also remove JUMP statement that correspond to an old receiver not making the MJD cut
+        
+    def simplify_parfile(self, tall, parout,otherflag=None):
+        """Convert a complicated 15yr parfile into a simplified parfile"""
+        rcvr=np.unique(tall.get_flag_value("fe")[0])
+        #rcvr=np.unique(tall.table['fe'])
         a=tall.table['fe','mjd']
         for rc in rcvr:
             x=str(rc)==a["fe"]
@@ -93,13 +92,13 @@ class TOA_tg:
                 if line is not None:
                     fo.write(line)
         ms = pm.get_model(parout)
-        return ms   
+        return ms  
     
-    def freeze_fit_pars(self,ms):
-            # Freeze/fix all the fitted parameters  
+    # Freeze/fix all the fitted parameters 
+    def freeze_fit_pars(self,ms): 
         for param in ms.free_params:
             getattr(ms, param).frozen = True
-        # Explicitly fit for F0, DM, and JUMP1 (should check if needed)
+        # Explicitly fit for F0, DM, and JUMPs
         getattr(ms, "F0").frozen = False
         getattr(ms, "DM").frozen = False
         getattr(ms, "JUMP1").frozen = False
@@ -113,9 +112,8 @@ class TOA_tg:
             getattr(ms, "TASC").frozen = False
         print("Free params:", ms.free_params)
         
-        
+    # Fit TOAs using a simple WLS fitter    
     def fit_TOAs(self,tall,ms,iterations):
-            # Use a simple WLS fitter
         f = pf.DownhillWLSFitter(tall, ms)
         try:
             f.fit_toas(maxiter=iterations)
@@ -125,11 +123,10 @@ class TOA_tg:
         print("Postfit RMS = ", f.resids.rms_weighted())
         return f
     
+    # Use z-score to remove outliers
     def cut_outliers(self,f):
-            #using z-score approach to remove outliers:
         stddev= np.std(f.resids.time_resids)
-        mean=np.mean(f.resids.time_resids) #the ideal scenario of 0 mean is reasonable here
-        #mean=0
+        mean=np.mean(f.resids.time_resids) 
         zscore=np.fabs(((f.resids.time_resids-mean)/stddev).decompose())
         zcut=zscore<self.zthres
         N0 = tall.ntoas
@@ -138,64 +135,60 @@ class TOA_tg:
 
 
 
-# Initial parameter set:
-#configs=glob.glob("/home/jovyan/work/timing_tg/update_parfiles/*.nb.yaml")
+run_15yr = True
+print(os.getcwd())
+# Set TOA and config file locations:
 quicklookdir = "/nanograv/timing/pipeline/quicklook/data/vegas/"
-configs=glob.glob("/home/jovyan/work/timing_analysis/configs/*.nb.yaml")
+configs = glob.glob("/nanograv/share/15yr/timing/intermediate/20230628.Release.nbwb.ce0b6e7e/narrowband/config/*.nb.yaml")
+#configs=glob.glob("/home/jovyan/work/timing_analysis/configs/*.nb.yaml")
 configs = [x for x in configs if ("gbt" not in x and "ao" not in x)]
 psrs = {os.path.split(x)[1].split(".")[0] for x in configs}
-print(psrs)
+niter = 3 #Iterations for fitting
+#Input range of data-set (*For 15 yr data-release, adding last three years only*)
+MJDlow = 57976 *au.d  #11Aug,2017
+MJDhigh = 59071 *au.d  #10Aug,2020
+if not os.path.exists('release_tools/pred_par/'):
+    os.mkdir('release_tools/pred_par/')
+print("Pulsars for which predictive par files are being generated: ", psrs)
 for psr in psrs:
     print(f"Working on {psr}")
     configfile = [x for x in configs if psr in x][0]
-    t=TOA_tg(psr,configfile) # intantiate the class
+    print(configfile)
+    # intantiate the class and load TOAs
+    t=Pred_par(psr,configfile,MJDlow,MJDhigh) 
     mo,to = t.load_toas()
+    # Apply manual cuts
     t.cut_toas(to)
-    # J1705-1903 is drifting so bad we need a special starting model
-    if psr=="J1705-1903":
-        mo = pm.get_model("J1705-1903_start.par")
-    tqfilenms = glob.glob(f"{quicklookdir}/{psr}/{psr}*.quicklook.x.nb.tim")
-    if len(tqfilenms)==0:
-        log.error(f"No quicklook TOAs for {psr}.  Skipping.")
-        continue
-    tall = t.load_merge_qck_toas(tqfilenms,quicklookdir,to,mo)
-    ms = t.simplify_parfile(tall, f"simple_ephem_tg/{psr}_simple.par")
+    if run_15yr == False:
+        # Load and merge quicklook TOAs
+        tqfilenms = glob.glob(f"{quicklookdir}/{psr}/{psr}*.quicklook.x.nb.tim")
+        if len(tqfilenms)==0:
+            log.error(f"No quicklook TOAs for {psr}.  ")
+            tall = to
+        else:
+            tall = t.load_merge_qck_toas(tqfilenms,quicklookdir,to,mo)
+    else:     
+        tall = to
+    tall.table = tall.table[:]
+    tall.compute_pulse_numbers(mo)
+    # Create an initial simple model
+    ms = t.simplify_parfile(tall, f"release_tools/pred_par/{psr}_simple.par")
     t.freeze_fit_pars(ms)
-    # Remove all of the early TOAs
+    # Remove TOAs outside the range provided
     tall.table = tall.table[t.MJDlow < tall.get_mjds()]
+    tall.table = tall.table[t.MJDhigh > tall.get_mjds()]
     # Calculate the pulse numbers based on the 15yr solutions
     tall.compute_pulse_numbers(mo)
     # Use a simple WLS fitter
-    f=t.fit_TOAs(tall,ms,2)
-    f.plot()
+    f=t.fit_TOAs(tall,ms,niter)
+#     f.plot()
     t.cut_outliers(f)
-    f=t.fit_TOAs(tall,ms,2)
-    f.plot()
-    # Write the new parfile
+    f=t.fit_TOAs(tall,ms,niter)
+#     f.plot()
+    # Write the new parfile and remove simple ones to avoid confusion
     f.model.CLOCK.value = "TT(BIPM)"
-    f.model.write_parfile(f"simple_ephem_tg/{psr}_fold.par", format="tempo")
+    f.model.write_parfile(f"release_tools/pred_par/{psr}_pred.par", format="tempo")
+    if os.path.exists(f"release_tools/pred_par/{psr}_simple.par"):
+        os.remove(f"release_tools/pred_par/{psr}_simple.par")
     
-
-
-#psrs with issue: 
-
-#No quicklook TOAs in VEGAS:
-
-#J1312+0051 (no quicklook TOAs)
-#J0709+0458 (no quicklook TOAs)
-#B1953+29 (no quicklook TOAs)
-#J1453+1902 (no quicklook TOAs)
-
-#J1614-2230 (one bad observation)
-#1719-1438 (Last obs, too bad!)
-#2043+1711 (too few TOAs?)
-
-
-
-#*1705-1903* (- try multiple iterations)
-#*1713+0747* (sudden offset and drift from there) -- good timing, ignore
-#*B1937+21* (Huge trend in the TOAs at the beginning) -- dmx trend, ignore
-
-
-
-
+    
