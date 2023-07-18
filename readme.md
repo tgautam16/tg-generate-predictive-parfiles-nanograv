@@ -1,2 +1,2 @@
 # Code to simplify nanograv pulsars ephemeris
-# Include class TOA_tg
+The code 'generate_predictive_parfiles.py' creates tempo format predictive par files for the 68 pulsars included in the 15-yr dataset. It creates them by considering last three years of data and excluding FD, FB, DMX and rednoise parameters. These simple parfiles can be used to fold these pulsars with the latest data. The output files are stored in the folder 'pred_par'.
